@@ -1,5 +1,6 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Alert, Box, Button, CircularProgress, Paper, Typography } from '@mui/material';
+import ZoomOutIcon from '@mui/icons-material/ZoomOutMap';
 import AppShell from '../components/AppShell';
 import FilterBar from '../components/FilterBar';
 import TimelineChart from '../components/chart/TimelineChart';
@@ -64,6 +65,16 @@ export default function DashboardPage() {
     );
   }, [intervals, timeRange, showIndividualProduces]);
 
+  // Chart zoom domain lives here (not inside TimelineChart) so a "Reset zoom" control can sit
+  // next to the legend, above the chart itself.
+  const [chartDomain, setChartDomain] = useState<[number, number] | null>(null);
+  useEffect(() => {
+    if (chartData) setChartDomain([chartData.domainStartMs, chartData.domainEndMs]);
+  }, [chartData?.domainStartMs, chartData?.domainEndMs]);
+
+  const isChartZoomed =
+    !!chartData && !!chartDomain && (chartDomain[0] !== chartData.domainStartMs || chartDomain[1] !== chartData.domainEndMs);
+
   const hourColumns = useMemo(() => {
     if (!timeRange) return [];
     return buildHourColumns(new Date(timeRange.from_ts), new Date(timeRange.to_ts));
@@ -126,8 +137,22 @@ export default function DashboardPage() {
       ) : (
         <>
           <Box sx={{ mb: 2 }}>
-            <ChartLegend partModelSeries={chartData?.series} />
-            {chartData && <TimelineChart data={chartData} />}
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 1 }}>
+              <ChartLegend partModelSeries={chartData?.series} />
+              {isChartZoomed && (
+                <Button
+                  size="small"
+                  startIcon={<ZoomOutIcon fontSize="small" />}
+                  onClick={() => chartData && setChartDomain([chartData.domainStartMs, chartData.domainEndMs])}
+                  sx={{ flexShrink: 0 }}
+                >
+                  Reset zoom
+                </Button>
+              )}
+            </Box>
+            {chartData && chartDomain && (
+              <TimelineChart data={chartData} domain={chartDomain} onDomainChange={setChartDomain} />
+            )}
           </Box>
           <HourlyTable columns={hourColumns} rows={hourlyRows} />
         </>

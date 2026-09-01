@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Box, Typography, Paper, Chip, Button } from '@mui/material';
+import { Box, Typography, Paper, Chip } from '@mui/material';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
-import ZoomOutIcon from '@mui/icons-material/ZoomOutMap';
 import type { ChartData, MarkerGeom } from './chartGeometry';
 import { downsampleForDisplay, shouldRenderMarkerGlyph } from './downsample';
 import { formatIst } from '../../utils/time';
@@ -17,6 +16,9 @@ const MIN_BAND_WIDTH_FOR_LABEL = 22;
 interface TimelineChartProps {
   data: ChartData;
   height?: number;
+  /** Controlled zoom domain — lifted to the parent so a "Reset zoom" control can live outside this component (e.g. next to the legend). */
+  domain: [number, number];
+  onDomainChange: (domain: [number, number]) => void;
 }
 
 interface HoverInfo {
@@ -26,19 +28,13 @@ interface HoverInfo {
   color: string;
 }
 
-export default function TimelineChart({ data, height = 420 }: TimelineChartProps) {
+export default function TimelineChart({ data, height = 420, domain, onDomainChange }: TimelineChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [width, setWidth] = useState(800);
-  const [domain, setDomain] = useState<[number, number]>([data.domainStartMs, data.domainEndMs]);
   const [dragStartX, setDragStartX] = useState<number | null>(null);
   const [dragCurrentX, setDragCurrentX] = useState<number | null>(null);
   const [hover, setHover] = useState<HoverInfo | null>(null);
-
-  // Reset the visible domain whenever fresh data arrives (new filter selection).
-  useEffect(() => {
-    setDomain([data.domainStartMs, data.domainEndMs]);
-  }, [data.domainStartMs, data.domainEndMs]);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -278,7 +274,7 @@ export default function TimelineChart({ data, height = 420 }: TimelineChartProps
       const newStart = Math.min(msA, msB);
       const newEnd = Math.max(msA, msB);
       if (newEnd - newStart >= MIN_ZOOM_SPAN_MS) {
-        setDomain([newStart, newEnd]);
+        onDomainChange([newStart, newEnd]);
       }
     }
     setDragStartX(null);
@@ -292,10 +288,8 @@ export default function TimelineChart({ data, height = 420 }: TimelineChartProps
   };
 
   const resetZoom = useCallback(() => {
-    setDomain([data.domainStartMs, data.domainEndMs]);
-  }, [data.domainStartMs, data.domainEndMs]);
-
-  const isZoomed = domainStart !== data.domainStartMs || domainEnd !== data.domainEndMs;
+    onDomainChange([data.domainStartMs, data.domainEndMs]);
+  }, [data.domainStartMs, data.domainEndMs, onDomainChange]);
 
   const axisTicks = useMemo(
     () => buildAxisTicks(domainStart, domainEnd, plotWidth),
@@ -304,17 +298,10 @@ export default function TimelineChart({ data, height = 420 }: TimelineChartProps
 
   return (
     <Paper elevation={1} sx={{ p: 2 }}>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 1 }}>
-        <Typography variant="caption" color="text.secondary">
-          Shift + drag to zoom into a time range · double-click to reset · colored lines = cumulative
-          production (OK + NG) per part model
-        </Typography>
-        {isZoomed && (
-          <Button size="small" startIcon={<ZoomOutIcon fontSize="small" />} onClick={resetZoom} sx={{ flexShrink: 0 }}>
-            Reset zoom
-          </Button>
-        )}
-      </Box>
+      <Typography variant="caption" color="text.secondary">
+        Shift + drag to zoom into a time range · double-click to reset · colored lines = cumulative
+        production (OK + NG) per part model
+      </Typography>
       <Box ref={containerRef} sx={{ position: 'relative', mt: 1 }}>
         <canvas
           ref={canvasRef}
