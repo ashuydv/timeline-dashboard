@@ -35,9 +35,13 @@ export default function DashboardPage() {
   const selectedAsset = assets.find((a) => a.id === selectedAssetId) ?? null;
   const selectedShift = shiftOptions.find((o) => shiftOptionKey(o) === selectedShiftKey) ?? null;
 
-  const entityScope: EntityScope | null = selectedAsset
-    ? { type: 'asset', asset: { asset_id: selectedAsset.id, asset_level_id: selectedAsset.assetlevel_id } }
-    : null;
+  const entityScope: EntityScope | null = useMemo(
+    () =>
+      selectedAsset
+        ? { type: 'asset', asset: { asset_id: selectedAsset.id, asset_level_id: selectedAsset.assetlevel_id } }
+        : null,
+    [selectedAsset],
+  );
 
   const timeRange = useMemo(() => {
     if (!selectedShift) return null;
