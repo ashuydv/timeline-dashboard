@@ -1,4 +1,5 @@
 import { istHourBucketStart } from './time';
+import { downtimeKind } from './segmentKind';
 import type {
   CycleTimeBucket,
   DowntimeSegment,
@@ -23,6 +24,9 @@ export interface HourlyRow {
   unplannedProductionMin: number;
   stoppageMin: number;
   unknownDowntimeMin: number;
+  plannedDowntimeMin: number;
+  /** Downtime types other than "unknown"/"planned" — a safety net so a type we haven't seen never silently vanishes from the per-hour totals. Zero on every dataset observed so far. */
+  otherDowntimeMin: number;
   idealCycleTimeSeconds: number | null;
   actualCycleTimeSeconds: number | null;
   isFuture: boolean; // bucket starts after "now" IST — leave blank per 2.4 in-progress rule
@@ -85,6 +89,8 @@ export function computeHourlyRows(
     unplannedProductionMin: 0,
     stoppageMin: 0,
     unknownDowntimeMin: 0,
+    plannedDowntimeMin: 0,
+    otherDowntimeMin: 0,
     idealCycleTimeSeconds: null,
     actualCycleTimeSeconds: null,
     isFuture: col.bucketStartUtc.getTime() > nowUtc.getTime(),
@@ -93,21 +99,25 @@ export function computeHourlyRows(
   for (const rt of intervals.runtimes as RuntimeSegment[]) {
     const start = new Date(rt.start_at);
     const end = new Date(rt.end_at);
+    // Runtime and Unplanned Production are disjoint categories that both feed the per-hour
+    // sanity identity (runtime + unplanned + stoppage + unknown ≈ 60) — a minute must land in
+    // exactly one of them, never both, or every hour containing unplanned production would
+    // over-count and fail that check.
+    const isUnplanned = rt.type === 'unknown unplanned production';
     distributeMinutes(start, end, columns, (idx, minutes) => {
-      rows[idx].runtimeMin += minutes;
-      if (rt.type === 'unknown unplanned production') {
-        rows[idx].unplannedProductionMin += minutes;
-      }
+      if (isUnplanned) rows[idx].unplannedProductionMin += minutes;
+      else rows[idx].runtimeMin += minutes;
     });
   }
 
   for (const dt of intervals.downtimes as DowntimeSegment[]) {
     const start = new Date(dt.start_at);
     const end = new Date(dt.end_at);
+    const kind = downtimeKind(dt);
     distributeMinutes(start, end, columns, (idx, minutes) => {
-      if (dt.type === 'unknown') {
-        rows[idx].unknownDowntimeMin += minutes;
-      }
+      if (kind === 'unknown-downtime') rows[idx].unknownDowntimeMin += minutes;
+      else if (kind === 'planned-downtime') rows[idx].plannedDowntimeMin += minutes;
+      else rows[idx].otherDowntimeMin += minutes;
     });
   }
 

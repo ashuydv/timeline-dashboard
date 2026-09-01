@@ -11,9 +11,11 @@ const ROW_DEFS: { key: keyof HourlyRow; label: string; fmt: (v: HourlyRow) => st
   { key: 'pass', label: 'Pass', fmt: (r) => String(r.pass) },
   { key: 'fail', label: 'Fail', fmt: (r) => String(r.fail) },
   { key: 'runtimeMin', label: 'Runtime', fmt: (r) => minutesLabel(r.runtimeMin) },
+  { key: 'plannedDowntimeMin', label: 'Planned Downtime', fmt: (r) => minutesLabel(r.plannedDowntimeMin) },
   { key: 'unplannedProductionMin', label: 'Unplanned Production', fmt: (r) => minutesLabel(r.unplannedProductionMin) },
   { key: 'stoppageMin', label: 'Stoppage', fmt: (r) => minutesLabel(r.stoppageMin) },
   { key: 'unknownDowntimeMin', label: 'Unknown Downtime', fmt: (r) => minutesLabel(r.unknownDowntimeMin) },
+  { key: 'otherDowntimeMin', label: 'Other Downtime', fmt: (r) => minutesLabel(r.otherDowntimeMin) },
   {
     key: 'idealCycleTimeSeconds',
     label: 'Ideal Cycle Time',
@@ -31,6 +33,12 @@ function minutesLabel(min: number): string {
 }
 
 export default function HourlyTable({ columns, rows }: HourlyTableProps) {
+  // "Other Downtime" is a safety net for a downtime type this backend hasn't been observed to
+  // return (see segmentKind.ts) — hide it when it's zero everywhere so it doesn't clutter the
+  // table with a row that never has anything in it.
+  const showOtherDowntime = rows.some((r) => r.otherDowntimeMin > 0);
+  const visibleRowDefs = ROW_DEFS.filter((r) => r.key !== 'otherDowntimeMin' || showOtherDowntime);
+
   return (
     <Paper elevation={1} sx={{ p: 2 }}>
       <Typography variant="subtitle1" fontWeight={600} sx={{ mb: 1.5 }}>
@@ -49,7 +57,7 @@ export default function HourlyTable({ columns, rows }: HourlyTableProps) {
             </TableRow>
           </TableHead>
           <TableBody>
-            {ROW_DEFS.map((rowDef) => (
+            {visibleRowDefs.map((rowDef) => (
               <TableRow key={rowDef.key}>
                 <TableCell sx={{ fontWeight: 500 }}>{rowDef.label}</TableCell>
                 {rows.map((row, idx) => (

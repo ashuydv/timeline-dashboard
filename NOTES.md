@@ -119,6 +119,31 @@ All backend timestamps are UTC; all backend requests must be UTC; everything on 
 - **In-progress shift:** each column carries `isFuture = bucketStartUtc > now`; the table renders
   those cells blank instead of `0`, per the spec's "don't zero-fill the future" rule.
 
+### Downtime/runtime categories — a real bug I found and fixed via the sanity check
+
+The spec gives a per-hour sanity identity: `runtime + unplanned-production + stoppage + unknown ≈ 60`
+for every fully-elapsed hour. I used it as a check, not just a description, and it caught two real
+issues against live data (Line 1, 23 June):
+
+1. **Live downtimes come in two observed types, not one.** The written spec's table (2.4) only lists
+   an "Unknown Downtime" row, but the live backend also returns `downtime.type: "planned"` — e.g. a
+   30-minute planned-downtime block at 11:50–12:20 IST that the spec's row set had nowhere to put. The
+   provided mockup screenshots *do* show a separate "Planned Downtime" row (plus "Minor Stoppage" and
+   "Unplanned Downtime", which I never observed the live backend return). Per the brief's own rule —
+   screenshots are the visual source of truth, and where they disagree with the text you ask rather
+   than guess — I added a **Planned Downtime** row (populated from `type: "planned"`) plus a
+   safety-net **Other Downtime** row for any type I haven't seen, so no returned segment is ever
+   silently dropped from the totals. "Other Downtime" only renders when it's non-zero, since on every
+   dataset I've queried it's always empty. I did not add "Minor Stoppage" or "Unplanned Downtime" as
+   separate concepts, since the live `downtimes` array has no field that distinguishes them from
+   "planned"/"unknown" — inventing a split the data doesn't support would be guessing, not modeling.
+2. **Runtime and Unplanned Production must be disjoint, not overlapping.** My first pass added every
+   `runtimes` segment's minutes to the generic Runtime row *and*, separately, added
+   `"unknown unplanned production"`-typed segments to the Unplanned Production row — double-counting
+   those minutes in the sanity sum (one hour summed to 62.8 instead of 60). Fixed by routing each
+   runtime segment to exactly one of the two rows by its `type`, which is what the sanity identity
+   requires and what the mockup's side-by-side rows imply.
+
 ## What I cut / assumptions
 
 - **Asset picker** flattens the whole tree into one indented `<Select>` rather than a cascading
