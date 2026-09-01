@@ -126,7 +126,7 @@ export default function DashboardPage() {
       ) : (
         <>
           <Box sx={{ mb: 2 }}>
-            <ChartLegend />
+            <ChartLegend partModelSeries={chartData?.series} />
             {chartData && <TimelineChart data={chartData} />}
           </Box>
           <HourlyTable columns={hourColumns} rows={hourlyRows} />

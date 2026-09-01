@@ -34,38 +34,47 @@ Implementation:
 
 ## Chart performance (10k–20k markers)
 
-**Approach: hand-rolled Canvas 2D, no charting library.**
+**Approach: hand-rolled Canvas 2D, no charting library.** The chart matches the mockups' model: the
+y-axis is **cumulative produce count** (a running OK+NG total per part model), not a fixed marker
+row — each point sits on a rising polyline at its running total, PASS as a small circle and FAIL as
+a cross, drawn over the runtime/downtime/stoppage segment bands (with rotated in-band labels), plus
+a "Last observed produce" chip and an "N unknown segments · M min" warning chip.
 
-Rationale: at this point count, SVG's per-node DOM overhead (each marker = a real DOM element with
-its own paint/layout cost) becomes the bottleneck well before 10k points, and hover/zoom would mean
-re-diffing thousands of nodes on every interaction. Canvas draws pixels directly with a handful of
-`fill()` calls per frame — the cost is proportional to draw calls, not DOM size. I considered uPlot
-(fast, canvas-based, built for exactly this) but its bar-based data model doesn't map cleanly onto
-"colored segment bands + two independent marker series," and I wanted precise control over the
-brush-zoom and FAIL-priority downsampling described below. WebGL (deck.gl) was overkill — this data
-set is 1-2 orders of magnitude below where WebGL's setup cost pays for itself.
+Rationale for Canvas over a library or SVG: at this point count, SVG's per-node DOM overhead (each
+marker = a real DOM element with its own paint/layout cost) becomes the bottleneck well before 10k
+points, and hover/zoom would mean re-diffing thousands of nodes on every interaction. Canvas draws
+pixels directly with a handful of `fill()`/`stroke()` calls per frame — cost is proportional to draw
+calls, not DOM size. I considered uPlot but its data model doesn't map cleanly onto "colored segment
+bands + a per-part-model cumulative line with two marker glyph types," and I wanted precise control
+over brush-zoom and FAIL-priority downsampling. WebGL was overkill at this scale.
 
 **Structure — geometry resolved once, drawing is a dumb loop:**
 
 1. `chartGeometry.ts` — `buildChartData()` runs once per fetch (not per frame, not per pixel move).
-   It parses every timestamp with `Date.parse` a single time and resolves each segment/marker's kind
-   and color up front. The render loop in `TimelineChart.tsx` never parses a date or looks up a color
-   — it only reads pre-resolved `{startMs, endMs, color}` / `{tsMs, result}` objects and does a linear
-   `xScale()` multiply. This is the "don't do per-marker parsing or color lookups in the render path"
-   requirement from the brief, taken literally.
-2. **Downsampling — `downsample.ts`.** With the domain and pixel width known, I bucket markers into
-   one-per-pixel-column: at most one representative PASS marker survives per column (additional PASS
-   points in the same column would render on the identical pixel anyway, so nothing is visually lost),
-   but **every FAIL is kept, unconditionally**, regardless of how many share a column. This is the
-   one hard rule from the brief — thinning must never hide a defect — so FAILs bypass the dedup
-   entirely rather than being thinned by the same rule as PASS. Re-run on domain/width change (i.e.
-   on zoom), not on every mousemove.
-3. Two separate `ctx.beginPath()` / `fill()` batches — one for all PASS circles, one for all FAIL
-   circles — instead of one fill call per marker, since per-call state changes (`fillStyle`) are the
-   expensive part of canvas drawing, not the number of `arc()` calls within a single path.
-4. **Hover** does a binary search over the (time-sorted) *displayed* marker array to find the nearest
-   candidate to the cursor's x position, then checks 2-3 neighbors for the true nearest — O(log n)
-   instead of a linear scan across 20k points on every `mousemove`.
+   For each part model it sorts that model's raw produce rows by timestamp (`first_seen_ts` is
+   explicitly documented as unsorted) and walks them once to assign each point its running
+   `cumulativeCount`, its resolved color, and its kind — so the render loop in `TimelineChart.tsx`
+   never parses a date, sorts, or accumulates a total; it only reads pre-resolved
+   `{tsMs, cumulativeCount, result, color}` and applies a linear `xScale`/`yScale`. This is the
+   "don't do per-marker parsing or color lookups in the render path" requirement, taken literally.
+2. **Downsampling — `downsample.ts`.** With the domain and pixel width known, each part model's
+   series is bucketed to ~1 point per pixel column: at most one representative PASS point survives
+   per column (redundant PASS points in the same column would land on the same pixel anyway), but
+   **every FAIL is kept, unconditionally**, and the series' first/last point is always kept so the
+   polyline's visible endpoints never shift. This is the one hard rule from the brief — thinning must
+   never hide a defect — so FAILs bypass the dedup entirely. Re-run on domain/width change (zoom),
+   not on every mousemove. Above ~800 displayed points, PASS circles stop being individually drawn
+   (the line itself already shows the trend at that density) while FAIL crosses are still drawn every
+   time, at any density — so the chart degrades to "just the line" under load rather than to "an
+   unreadable smear of circles," without ever degrading FAIL visibility.
+3. Batched `ctx.beginPath()` calls — one stroke per part-model line, one fill pass for all of that
+   series' PASS circles, one stroke pass for all its FAIL crosses — instead of one draw call per
+   point, since per-call state changes (`fillStyle`/`strokeStyle`) are the expensive part of canvas
+   drawing, not the number of path segments within a single call.
+4. **Hover** flattens the displayed points across all part-model series into one time-sorted array
+   and binary-searches it for the nearest candidate to the cursor's x position, checking 2-3
+   neighbors for the true nearest — O(log n) instead of a linear scan across 20k points on every
+   `mousemove`.
 5. **Zoom** is a shift-drag brush on the canvas (mousedown → mousemove draws a translucent selection
    rect → mouseup commits the new `[domainStart, domainEnd]`), with a 60s minimum span so you can't
    zoom into a degenerate 0-width range. Double-click resets to the full shift window. Panning was
@@ -75,11 +84,12 @@ set is 1-2 orders of magnitude below where WebGL's setup cost pays for itself.
 Playwright (not a mock), selected a machine/date/shift combination that returned ~5,100 real
 `produces` rows with real FAILs mixed in, toggled "Show individual produces" on, and captured
 screenshots through a shift-drag zoom, a hover, and a double-click reset. All three interactions
-returned in well under a frame of visible lag with zero console errors, and the FAIL markers (red)
-remained visible and at fixed positions before and after zoom — nothing was silently dropped. I did
-not use React state for anything inside the per-frame draw path (the `useEffect` draw only re-runs
-when `data`, `displayMarkers`, `domain`, or `width` change — never on raw mouse position, which is
-tracked via drag-preview state that triggers only the lightweight brush-rect redraw).
+returned in well under a frame of visible lag with zero console errors, and every FAIL cross stayed
+visible and at its correct cumulative-count height before and after zoom — nothing was silently
+dropped. I did not use React state for anything inside the per-frame draw path (the `useEffect` draw
+only re-runs when `data`, the downsampled series, `domain`, or `width` change — never on raw mouse
+position, which is tracked via drag-preview state that triggers only the lightweight brush-rect
+redraw).
 
 ## Time handling (UTC ↔ IST)
 

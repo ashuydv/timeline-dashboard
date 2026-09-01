@@ -20,13 +20,31 @@ export interface MarkerGeom {
   tsMs: number;
   result: 'PASS' | 'FAIL';
   id: string;
+  partModelId: string;
+  cumulativeCount: number; // running OK+NG total for this part model, at this point
+}
+
+export interface PartModelSeries {
+  partModelId: string;
+  color: string;
+  points: MarkerGeom[]; // sorted by tsMs, cumulativeCount is monotonically non-decreasing
 }
 
 export interface ChartData {
   segments: SegmentGeom[]; // sorted by startMs
-  markers: MarkerGeom[]; // sorted by tsMs — from produces (exact) or synthesized from produce_counts (coarse)
+  series: PartModelSeries[]; // one per part model, each independently cumulative
+  maxCumulativeCount: number; // for y-axis scaling
   domainStartMs: number;
   domainEndMs: number;
+  lastObserveTsMs: number | null;
+  unknownSegmentCount: number;
+  unknownSegmentMinutes: number;
+}
+
+const PART_MODEL_COLORS = ['#1976d2', '#8e24aa', '#00838f', '#f9a825', '#5d4037', '#c2185b'];
+
+function colorForPartModel(index: number): string {
+  return PART_MODEL_COLORS[index % PART_MODEL_COLORS.length] ?? '#1976d2';
 }
 
 function segmentLabel(kind: SegmentKind): string {
@@ -36,7 +54,7 @@ function segmentLabel(kind: SegmentKind): string {
     case 'unplanned-production':
       return 'Unplanned Production';
     case 'unknown-downtime':
-      return 'Unknown Downtime';
+      return 'Unknown';
     case 'stoppage':
       return 'Stoppage';
     default:
@@ -85,28 +103,75 @@ export function buildChartData(
   }
   segments.sort((a, b) => a.startMs - b.startMs);
 
-  const markers: MarkerGeom[] = [];
+  let unknownSegmentCount = 0;
+  let unknownSegmentMinutes = 0;
+  for (const seg of segments) {
+    if (seg.kind === 'unknown-downtime') {
+      unknownSegmentCount++;
+      unknownSegmentMinutes += (seg.endMs - seg.startMs) / 60000;
+    }
+  }
+
+  // Flatten raw produce rows per part model (exact mode), or synthesize evenly-spaced
+  // timestamps within each hour from produce_counts (coarse mode) so both modes share
+  // the same downstream cumulative/rendering path.
+  const rawByPartModel = new Map<string, { tsMs: number; result: 'PASS' | 'FAIL'; id: string }[]>();
+
+  const pushRaw = (partModelId: string, tsMs: number, result: 'PASS' | 'FAIL', id: string) => {
+    let arr = rawByPartModel.get(partModelId);
+    if (!arr) {
+      arr = [];
+      rawByPartModel.set(partModelId, arr);
+    }
+    arr.push({ tsMs, result, id });
+  };
 
   if (useExactProduces && intervals.produces) {
     for (const bucket of intervals.produces as ProduceBucket[]) {
       for (const p of bucket.produces) {
-        markers.push({ tsMs: Date.parse(p.first_seen_ts), result: p.result, id: p.produce_id });
+        pushRaw(p.part_model_id, Date.parse(p.first_seen_ts), p.result, p.produce_id);
       }
     }
   } else {
-    // Coarse mode: synthesize one marker per hour bucket per result, count encoded via id suffix.
-    // We don't have individual timestamps, so we spread synthetic points evenly within the hour
-    // for OK/NG counts — this keeps the same rendering path for both modes.
     for (const pc of intervals.produce_counts as ProduceCountBucket[]) {
       const bucketStartMs = Date.parse(pc.bucket_start);
-      spreadSynthetic(bucketStartMs, pc.ok_count, 'PASS', pc.part_model_id, markers);
-      spreadSynthetic(bucketStartMs, pc.ng_count, 'FAIL', pc.part_model_id, markers);
+      spreadSynthetic(bucketStartMs, pc.ok_count, 'PASS', pc.part_model_id, pushRaw);
+      spreadSynthetic(bucketStartMs, pc.ng_count, 'FAIL', pc.part_model_id, pushRaw);
     }
   }
 
-  markers.sort((a, b) => a.tsMs - b.tsMs);
+  const series: PartModelSeries[] = [];
+  let maxCumulativeCount = 0;
+  let lastObserveTsMs: number | null = null;
+  let partIndex = 0;
 
-  return { segments, markers, domainStartMs, domainEndMs };
+  for (const [partModelId, raw] of rawByPartModel) {
+    raw.sort((a, b) => a.tsMs - b.tsMs); // first_seen_ts is NOT sorted by the API — sort explicitly
+    const color = colorForPartModel(partIndex++);
+    const points: MarkerGeom[] = [];
+    let running = 0;
+    for (const r of raw) {
+      running += 1;
+      points.push({ tsMs: r.tsMs, result: r.result, id: r.id, partModelId, cumulativeCount: running });
+    }
+    if (points.length > 0) {
+      maxCumulativeCount = Math.max(maxCumulativeCount, running);
+      const last = points[points.length - 1].tsMs;
+      lastObserveTsMs = lastObserveTsMs === null ? last : Math.max(lastObserveTsMs, last);
+    }
+    series.push({ partModelId, color, points });
+  }
+
+  return {
+    segments,
+    series,
+    maxCumulativeCount,
+    domainStartMs,
+    domainEndMs,
+    lastObserveTsMs,
+    unknownSegmentCount,
+    unknownSegmentMinutes,
+  };
 }
 
 function spreadSynthetic(
@@ -114,15 +179,11 @@ function spreadSynthetic(
   count: number,
   result: 'PASS' | 'FAIL',
   partModelId: string,
-  out: MarkerGeom[],
+  push: (partModelId: string, tsMs: number, result: 'PASS' | 'FAIL', id: string) => void,
 ) {
   const HOUR_MS = 60 * 60 * 1000;
   for (let i = 0; i < count; i++) {
     const frac = (i + 0.5) / count;
-    out.push({
-      tsMs: bucketStartMs + frac * HOUR_MS,
-      result,
-      id: `${partModelId}-${result}-${bucketStartMs}-${i}`,
-    });
+    push(partModelId, bucketStartMs + frac * HOUR_MS, result, `${partModelId}-${result}-${bucketStartMs}-${i}`);
   }
 }
