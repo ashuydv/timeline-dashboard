@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Box, Typography, Paper, Chip } from '@mui/material';
+import { Box, Typography, Paper, Chip, Button } from '@mui/material';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
+import ZoomOutIcon from '@mui/icons-material/ZoomOutMap';
 import type { ChartData, MarkerGeom } from './chartGeometry';
 import { downsampleForDisplay, shouldRenderMarkerGlyph } from './downsample';
 import { formatIst } from '../../utils/time';
@@ -290,9 +291,11 @@ export default function TimelineChart({ data, height = 420 }: TimelineChartProps
     setHover(null);
   };
 
-  const handleDoubleClick = () => {
+  const resetZoom = useCallback(() => {
     setDomain([data.domainStartMs, data.domainEndMs]);
-  };
+  }, [data.domainStartMs, data.domainEndMs]);
+
+  const isZoomed = domainStart !== data.domainStartMs || domainEnd !== data.domainEndMs;
 
   const axisTicks = useMemo(
     () => buildAxisTicks(domainStart, domainEnd, plotWidth),
@@ -301,10 +304,17 @@ export default function TimelineChart({ data, height = 420 }: TimelineChartProps
 
   return (
     <Paper elevation={1} sx={{ p: 2 }}>
-      <Typography variant="caption" color="text.secondary">
-        Shift + drag to zoom into a time range · double-click to reset · colored lines = cumulative production
-        (OK + NG) per part model
-      </Typography>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 1 }}>
+        <Typography variant="caption" color="text.secondary">
+          Shift + drag to zoom into a time range · double-click to reset · colored lines = cumulative
+          production (OK + NG) per part model
+        </Typography>
+        {isZoomed && (
+          <Button size="small" startIcon={<ZoomOutIcon fontSize="small" />} onClick={resetZoom} sx={{ flexShrink: 0 }}>
+            Reset zoom
+          </Button>
+        )}
+      </Box>
       <Box ref={containerRef} sx={{ position: 'relative', mt: 1 }}>
         <canvas
           ref={canvasRef}
@@ -312,7 +322,7 @@ export default function TimelineChart({ data, height = 420 }: TimelineChartProps
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
           onMouseLeave={handleMouseLeave}
-          onDoubleClick={handleDoubleClick}
+          onDoubleClick={resetZoom}
           style={{ display: 'block', cursor: dragStartX !== null ? 'col-resize' : 'crosshair' }}
         />
         {hover && (
